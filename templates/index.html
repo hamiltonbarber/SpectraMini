@@ -1,0 +1,1531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpectraMini v8 - Spectral Editor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 1400px; }
+        .card { background-color: #fff; border: 1px solid #dee2e6; }
+        .card-header { font-weight: bold; background-color: #e9ecef; border-bottom: 1px solid #dee2e6; color: #212529; }
+        .card-body { color: #212529; }
+        h6 { color: #212529; font-weight: 600; }
+        
+        /* Editor Layout */
+        #editor-wrapper { position: relative; max-width: 100%; margin: auto; }
+        #waveform-container { position: relative; height: 80px; background: #1a1a2e; border-bottom: 1px solid #dee2e6; margin-left: 50px; cursor: pointer; }
+        #waveform-canvas { width: 100%; height: 100%; }
+        #spectrogram-area { position: relative; padding-left: 50px; padding-bottom: 35px; }
+        #spectrogram-container { position: relative; cursor: crosshair; height: 400px; background: #1a1a2e; }
+        #spectrogram-canvas, #selection-canvas, #playhead-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #selection-canvas { z-index: 10; }
+        #playhead-canvas { z-index: 15; pointer-events: none; }
+        #y-axis-canvas { position: absolute; left: 0; top: 0; width: 50px; background: #f8f9fa; }
+        #x-axis-canvas { position: absolute; left: 50px; height: 35px; background: #f8f9fa; }
+        #waveform-playhead { position: absolute; top: 0; width: 2px; height: 100%; background: #dc3545; pointer-events: none; z-index: 5; }
+        
+        /* Transport & Info */
+        .transport-bar { background: #e9ecef; padding: 10px 15px; border-radius: 4px; margin-bottom: 15px; display: flex; align-items: center; gap: 15px; border: 1px solid #dee2e6; }
+        .transport-btn { background: none; border: none; color: #212529; font-size: 1.5rem; cursor: pointer; padding: 5px 10px; }
+        .transport-btn:hover { color: #dc3545; }
+        .transport-btn.active { color: #dc3545; }
+        .time-display { font-family: monospace; font-size: 1.1rem; background: #fff; padding: 5px 12px; border-radius: 4px; min-width: 140px; border: 1px solid #dee2e6; color: #212529; }
+        .info-box { font-family: monospace; background-color: #e9ecef; padding: 10px; border-radius: 4px; font-size: 0.85em; color: #495057; }
+        
+        /* Undo/Redo */
+        .history-controls { display: flex; gap: 5px; }
+        .history-controls button { padding: 4px 10px; }
+        
+        /* AI Suggestions */
+        .ai-suggestion { cursor: pointer; transition: all 0.2s; background: #fff; border: 1px solid #dee2e6; }
+        .ai-suggestion:hover { background: #fff3cd; border-color: #ffc107; }
+        .ai-suggestion.active { background: #fff3cd; border-left: 3px solid #ffc107; }
+        .ai-suggestion .card-body { color: #212529; }
+        .ai-suggestion .text-warning { color: #856404 !important; }
+        .ai-suggestion .text-light { color: #495057 !important; }
+        
+        /* Processing Overlay */
+        .processing-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255, 255, 255, 0.85); display: none; align-items: center; justify-content: center; z-index: 50; }
+        
+        /* Keyboard shortcut hints */
+        .shortcut { font-size: 0.7rem; color: #6c757d; margin-left: 5px; }
+        
+        /* Auditioning state */
+        .btn-auditioning {
+            animation: pulse-audition 0.8s ease-in-out infinite;
+            background-color: #198754 !important;
+            border-color: #198754 !important;
+            color: white !important;
+        }
+        @keyframes pulse-audition {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .selection-auditioning {
+            animation: pulse-selection 0.8s ease-in-out infinite;
+        }
+        @keyframes pulse-selection {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 0.8; }
+        }
+        
+        /* Form controls */
+        .form-control { color: #212529; }
+        .form-label { color: #212529; }
+        .form-range { background: transparent; }
+        
+        /* Alerts */
+        .alert { color: inherit; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-3">
+        <div class="row">
+            <!-- Left Column: Controls -->
+            <div class="col-lg-3">
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        Controls
+                        <div class="history-controls">
+                            <button id="btn-undo" class="btn btn-sm btn-outline-secondary" disabled title="Undo (Ctrl+Z)">↶</button>
+                            <button id="btn-redo" class="btn btn-sm btn-outline-secondary" disabled title="Redo (Ctrl+Y)">↷</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <h6>1. Load Audio</h6>
+                        <div class="mb-2"><input class="form-control form-control-sm bg-dark text-light border-secondary" type="file" id="file-input" accept="audio/*"></div>
+                        <button id="btn-upload" class="btn btn-sm btn-success">Upload</button>
+                        <button id="btn-generate" class="btn btn-sm btn-secondary">Generate Test</button>
+                        <hr class="border-secondary">
+                        
+                        <h6>2. Edit Selection <span class="shortcut">(Draw on spectrogram)</span></h6>
+                        <div class="btn-group w-100 mb-2">
+                            <button id="btn-audition" class="btn btn-sm btn-outline-secondary" disabled>▶ Audition</button>
+                            <button id="btn-attenuate" class="btn btn-sm btn-danger" disabled>Attenuate</button>
+                            <button id="btn-boost" class="btn btn-sm btn-success" disabled>Boost</button>
+                        </div>
+                        <div class="btn-group w-100 mb-2">
+                            <button id="btn-heal" class="btn btn-sm btn-outline-info" disabled title="Interpolate from surrounding audio">Heal</button>
+                            <button id="btn-spectral-repair" class="btn btn-sm btn-outline-primary" disabled title="Advanced context-aware repair with harmonics">Spectral Repair</button>
+                        </div>
+                        
+                        <!-- Selection Mode -->
+                        <div class="mb-2">
+                            <small class="text-muted">Selection mode:</small>
+                            <div class="btn-group btn-group-sm w-100 mt-1">
+                                <button class="btn btn-outline-secondary active" id="sel-mode-rect" title="Rectangle selection">▭ Rect</button>
+                                <button class="btn btn-outline-secondary" id="sel-mode-time" title="Full frequency time slice">↕ Time</button>
+                                <button class="btn btn-outline-secondary" id="sel-mode-freq" title="Full time frequency band">↔ Freq</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Selection Presets -->
+                        <div class="mb-2">
+                            <small class="text-muted">Quick select:</small>
+                            <div class="btn-group btn-group-sm w-100 mt-1">
+                                <button class="btn btn-outline-secondary preset-btn" data-freq-min="20" data-freq-max="80" title="20-80 Hz">Rumble</button>
+                                <button class="btn btn-outline-secondary preset-btn" data-freq-min="200" data-freq-max="400" title="200-400 Hz">Mud</button>
+                                <button class="btn btn-outline-secondary preset-btn" data-freq-min="2000" data-freq-max="4000" title="2-4 kHz">Harsh</button>
+                                <button class="btn btn-outline-secondary preset-btn" data-freq-min="5000" data-freq-max="9000" title="5-9 kHz">Sibilance</button>
+                            </div>
+                            <button id="btn-deesser" class="btn btn-outline-secondary btn-sm w-100 mt-1" disabled title="Gentle de-essing (4-9 kHz, 50% reduction)">De-Esser (Gentle)</button>
+                        </div>
+                        <hr class="border-secondary">
+                        
+                        <h6>3. Quick Fix</h6>
+                        <div class="btn-group btn-group-sm w-100 mb-2">
+                            <button id="btn-hum-60" class="btn btn-outline-warning" disabled title="Remove 60Hz hum + harmonics">60Hz Hum</button>
+                            <button id="btn-hum-50" class="btn btn-outline-warning" disabled title="Remove 50Hz hum + harmonics">50Hz Hum</button>
+                        </div>
+                        <div class="btn-group btn-group-sm w-100 mb-2">
+                            <button id="btn-normalize" class="btn btn-outline-secondary" disabled title="Normalize to peak level">Normalize</button>
+                            <button id="btn-click-repair" class="btn btn-outline-secondary" disabled title="Detect and repair clicks">Click Repair</button>
+                        </div>
+                        <div class="btn-group btn-group-sm w-100 mb-2">
+                            <button id="btn-declip" class="btn btn-outline-danger" disabled title="Reconstruct clipped peaks">De-Clip</button>
+                            <button id="btn-decrackle" class="btn btn-outline-danger" disabled title="Remove vinyl/tape crackle">De-Crackle</button>
+                        </div>
+                        <div class="btn-group btn-group-sm w-100 mb-2">
+                            <button id="btn-dewind" class="btn btn-outline-info" disabled title="Remove low-freq wind rumble">De-Wind</button>
+                            <button id="btn-derustle" class="btn btn-outline-info" disabled title="Remove lav mic rustle">De-Rustle</button>
+                        </div>
+                        <div class="btn-group btn-group-sm w-100 mb-2">
+                            <button id="btn-breath" class="btn btn-outline-success" disabled title="Reduce breath sounds">Breath Ctrl</button>
+                            <button id="btn-mouth-declick" class="btn btn-outline-success" disabled title="Remove mouth clicks">Mouth De-Click</button>
+                        </div>
+                        <button id="btn-loudness" class="btn btn-outline-primary btn-sm w-100 mb-2" disabled title="Target streaming loudness (LUFS)">
+                            Loudness Optimize (-14 LUFS)
+                        </button>
+                        <hr class="border-secondary">
+                        
+                        <h6>4. Compare</h6>
+                        <button id="btn-toggle-original" class="btn btn-sm btn-outline-info w-100 mb-2" disabled>
+                            Show Original (A/B)
+                        </button>
+                        <hr class="border-secondary">
+                        
+                        <h6>5. Denoise</h6>
+                        <div class="btn-group w-100 mb-2">
+                            <button id="btn-capture-noise" class="btn btn-sm btn-warning" disabled>Capture Profile</button>
+                            <button id="btn-apply-denoise" class="btn btn-sm btn-primary" disabled>Apply</button>
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label small mb-1">Reduction: <span id="denoise-amount-label">1.0</span>x</label>
+                            <input type="range" class="form-range" min="0.1" max="2.0" step="0.1" value="1.0" id="denoise-amount">
+                            <span id="noise-profile-status" class="badge bg-secondary">No Profile</span>
+                        </div>
+                        <hr class="border-secondary">
+                        
+                        <h6>6. Layers</h6>
+                        <button id="btn-hpss" class="btn btn-info btn-sm" disabled>Separate H/P</button>
+                        <div id="layer-selector" class="mt-2" style="display: none;">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="layer" id="layer-main" value="current_audio" checked>
+                                <label class="form-check-label small" for="layer-main">Mix</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="layer" id="layer-harmonic" value="harmonic">
+                                <label class="form-check-label small" for="layer-harmonic">Harmonic</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="layer" id="layer-percussive" value="percussive">
+                                <label class="form-check-label small" for="layer-percussive">Percussive</label>
+                            </div>
+                        </div>
+                        <hr class="border-secondary">
+                        
+                        <a id="btn-download" class="btn btn-primary btn-sm w-100 disabled" href="#" download="edited_signal.wav">
+                            Download Edited Audio
+                        </a>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">Audio Analysis</div>
+                    <div class="card-body">
+                        <button id="btn-ai-suggest" class="btn btn-outline-primary w-100 btn-sm" disabled>Analyze Audio</button>
+                        <div id="ai-suggestions-list" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Editor -->
+            <div class="col-lg-9">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span id="spectrogram-title">Spectral Editor</span>
+                        <div class="info-box py-1 px-2 mb-0">
+                            <strong>Selection:</strong> <span id="selection-info">None</span>
+                        </div>
+                    </div>
+                    <div class="card-body position-relative p-2">
+                        <div class="processing-overlay" id="processing-overlay">
+                            <div class="spinner-border text-light"></div>
+                        </div>
+                        
+                        <!-- Transport Bar -->
+                        <div class="transport-bar">
+                            <button id="btn-play" class="transport-btn" title="Play/Pause (Space)">▶</button>
+                            <button id="btn-stop" class="transport-btn" title="Stop">⏹</button>
+                            <button id="btn-loop" class="transport-btn" title="Loop Selection (L)">🔁</button>
+                            <div class="time-display">
+                                <span id="current-time">0:00.000</span> / <span id="total-time">0:00.000</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Editor Area -->
+                        <div id="editor-wrapper">
+                            <!-- Waveform -->
+                            <div id="waveform-container">
+                                <canvas id="waveform-canvas"></canvas>
+                                <div id="waveform-playhead" style="left: 0;"></div>
+                            </div>
+                            
+                            <!-- Spectrogram with axes -->
+                            <div id="spectrogram-area">
+                                <canvas id="y-axis-canvas"></canvas>
+                                <div id="spectrogram-container">
+                                    <canvas id="spectrogram-canvas"></canvas>
+                                    <canvas id="selection-canvas"></canvas>
+                                    <canvas id="playhead-canvas"></canvas>
+                                </div>
+                                <canvas id="x-axis-canvas"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- Keyboard shortcuts hint -->
+                        <div class="info-box mt-2 small">
+                            <strong>Shortcuts:</strong> 
+                            Space = Play/Pause | 
+                            L = Loop | 
+                            Ctrl+Z = Undo | 
+                            Ctrl+Y = Redo |
+                            Click waveform/spectrogram = Seek
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <audio id="audio-player" style="display: none;"></audio>
+        <audio id="audition-player" style="display: none;"></audio>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM ELEMENTS ---
+        const dom = {
+            // Buttons
+            btnGenerate: document.getElementById('btn-generate'),
+            btnUpload: document.getElementById('btn-upload'),
+            btnAudition: document.getElementById('btn-audition'),
+            btnAttenuate: document.getElementById('btn-attenuate'),
+            btnBoost: document.getElementById('btn-boost'),
+            btnHeal: document.getElementById('btn-heal'),
+            btnCaptureNoise: document.getElementById('btn-capture-noise'),
+            btnApplyDenoise: document.getElementById('btn-apply-denoise'),
+            btnHpss: document.getElementById('btn-hpss'),
+            btnDownload: document.getElementById('btn-download'),
+            btnAiSuggest: document.getElementById('btn-ai-suggest'),
+            btnUndo: document.getElementById('btn-undo'),
+            btnRedo: document.getElementById('btn-redo'),
+            btnPlay: document.getElementById('btn-play'),
+            btnStop: document.getElementById('btn-stop'),
+            btnLoop: document.getElementById('btn-loop'),
+            btnToggleOriginal: document.getElementById('btn-toggle-original'),
+            btnHum60: document.getElementById('btn-hum-60'),
+            btnHum50: document.getElementById('btn-hum-50'),
+            btnNormalize: document.getElementById('btn-normalize'),
+            btnClickRepair: document.getElementById('btn-click-repair'),
+            selModeRect: document.getElementById('sel-mode-rect'),
+            selModeTime: document.getElementById('sel-mode-time'),
+            selModeFreq: document.getElementById('sel-mode-freq'),
+            btnDeesser: document.getElementById('btn-deesser'),
+            btnDeclip: document.getElementById('btn-declip'),
+            btnDecrackle: document.getElementById('btn-decrackle'),
+            btnLoudness: document.getElementById('btn-loudness'),
+            btnDewind: document.getElementById('btn-dewind'),
+            btnDerustle: document.getElementById('btn-derustle'),
+            btnBreath: document.getElementById('btn-breath'),
+            btnMouthDeclick: document.getElementById('btn-mouth-declick'),
+            btnSpectralRepair: document.getElementById('btn-spectral-repair'),
+            
+            // Inputs
+            fileInput: document.getElementById('file-input'),
+            denoiseAmount: document.getElementById('denoise-amount'),
+            
+            // Display elements
+            denoiseAmountLabel: document.getElementById('denoise-amount-label'),
+            noiseProfileStatus: document.getElementById('noise-profile-status'),
+            selInfo: document.getElementById('selection-info'),
+            spectrogramTitle: document.getElementById('spectrogram-title'),
+            layerSelector: document.getElementById('layer-selector'),
+            aiSuggestionsList: document.getElementById('ai-suggestions-list'),
+            processingOverlay: document.getElementById('processing-overlay'),
+            currentTime: document.getElementById('current-time'),
+            totalTime: document.getElementById('total-time'),
+            
+            // Audio
+            audioPlayer: document.getElementById('audio-player'),
+            auditionPlayer: document.getElementById('audition-player'),
+            
+            // Canvases
+            waveformContainer: document.getElementById('waveform-container'),
+            waveformCanvas: document.getElementById('waveform-canvas'),
+            waveformPlayhead: document.getElementById('waveform-playhead'),
+            specContainer: document.getElementById('spectrogram-container'),
+            specCanvas: document.getElementById('spectrogram-canvas'),
+            selCanvas: document.getElementById('selection-canvas'),
+            playheadCanvas: document.getElementById('playhead-canvas'),
+            yAxisCanvas: document.getElementById('y-axis-canvas'),
+            xAxisCanvas: document.getElementById('x-axis-canvas'),
+        };
+        
+        // Get contexts
+        const ctx = {
+            waveform: dom.waveformCanvas.getContext('2d'),
+            spec: dom.specCanvas.getContext('2d'),
+            sel: dom.selCanvas.getContext('2d'),
+            playhead: dom.playheadCanvas.getContext('2d'),
+            yAxis: dom.yAxisCanvas.getContext('2d'),
+            xAxis: dom.xAxisCanvas.getContext('2d'),
+        };
+
+        // --- STATE ---
+        let state = {
+            spectrogramData: {},
+            waveformData: null,
+            selection: { isDrawing: false, startX: 0, startY: 0 },
+            selectionMode: 'rect', // 'rect', 'time', 'freq'
+            lastSelectionCoords: null,
+            isPlaying: false,
+            isLooping: false,
+            audioDuration: 0,
+            auditionDuration: 0,
+            auditionPeak: 0,
+            showingOriginal: false,
+            originalAudioPath: null,
+            originalSpectrogram: null,
+            editedAudioPath: null,
+            editedSpectrogram: null,
+        };
+        
+        // --- UNDO/REDO HISTORY ---
+        let history = {
+            states: [],
+            currentIndex: -1,
+            maxStates: 20
+        };
+        
+        function saveToHistory(specData, audioPath) {
+            // Remove any states after current index (for redo)
+            history.states = history.states.slice(0, history.currentIndex + 1);
+            
+            // Add new state
+            history.states.push({
+                spectrogram: JSON.parse(JSON.stringify(specData)),
+                audioPath: audioPath,
+                timestamp: Date.now()
+            });
+            
+            // Limit history size
+            if (history.states.length > history.maxStates) {
+                history.states.shift();
+            } else {
+                history.currentIndex++;
+            }
+            
+            updateHistoryButtons();
+        }
+        
+        function undo() {
+            if (history.currentIndex > 0) {
+                history.currentIndex--;
+                restoreState(history.states[history.currentIndex]);
+            }
+        }
+        
+        function redo() {
+            if (history.currentIndex < history.states.length - 1) {
+                history.currentIndex++;
+                restoreState(history.states[history.currentIndex]);
+            }
+        }
+        
+        function restoreState(savedState) {
+            state.spectrogramData.currentSpec = savedState.spectrogram;
+            drawSpectrogram(savedState.spectrogram);
+            drawWaveformFromSpec(savedState.spectrogram);
+            dom.audioPlayer.src = savedState.audioPath + '?v=' + Date.now();
+            updateHistoryButtons();
+        }
+        
+        function updateHistoryButtons() {
+            dom.btnUndo.disabled = history.currentIndex <= 0;
+            dom.btnRedo.disabled = history.currentIndex >= history.states.length - 1;
+        }
+
+        // --- UTILITY FUNCTIONS ---
+        const uniqueParam = () => `?v=${Date.now()}`;
+        
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}:${secs.toFixed(3).padStart(6, '0')}`;
+        }
+        
+        async function processRequest(url, options, showOverlay = true) {
+            if (showOverlay) dom.processingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(url, options);
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+                return data;
+            } catch (e) {
+                alert('Error: ' + e.message);
+                return null;
+            } finally {
+                if (showOverlay) dom.processingOverlay.style.display = 'none';
+            }
+        }
+
+        // --- WAVEFORM DRAWING ---
+        function drawWaveform(waveformArray) {
+            const canvas = dom.waveformCanvas;
+            const container = dom.waveformContainer;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            const mid = height / 2;
+            
+            ctx.waveform.fillStyle = '#0a0a15';
+            ctx.waveform.fillRect(0, 0, width, height);
+            
+            ctx.waveform.strokeStyle = '#4a9eff';
+            ctx.waveform.lineWidth = 1;
+            ctx.waveform.beginPath();
+            
+            const step = Math.ceil(waveformArray.length / width);
+            for (let i = 0; i < width; i++) {
+                const idx = Math.floor(i * waveformArray.length / width);
+                // Get max amplitude in this segment
+                let maxAmp = 0;
+                for (let j = 0; j < step && idx + j < waveformArray.length; j++) {
+                    const val = Math.abs(waveformArray[idx + j]);
+                    if (val > maxAmp) maxAmp = val;
+                }
+                // Draw mirrored (above and below center line)
+                const y1 = mid - (maxAmp * mid * 0.85);
+                const y2 = mid + (maxAmp * mid * 0.85);
+                ctx.waveform.moveTo(i, y1);
+                ctx.waveform.lineTo(i, y2);
+            }
+            ctx.waveform.stroke();
+            
+            // Center line
+            ctx.waveform.strokeStyle = '#333';
+            ctx.waveform.beginPath();
+            ctx.waveform.moveTo(0, mid);
+            ctx.waveform.lineTo(width, mid);
+            ctx.waveform.stroke();
+            
+            state.waveformData = waveformArray;
+        }
+        
+        function drawWaveformFromSpec(spec) {
+            // Create approximate waveform from spectrogram data (RMS per frame)
+            const data = spec.data;
+            const numFrames = data[0].length;
+            const waveform = new Float32Array(numFrames);
+            
+            for (let t = 0; t < numFrames; t++) {
+                let sum = 0;
+                for (let f = 0; f < data.length; f++) {
+                    // Convert from dB back to amplitude (approximate)
+                    const amp = Math.pow(10, data[f][t] / 20);
+                    sum += amp * amp;
+                }
+                waveform[t] = Math.sqrt(sum / data.length);
+            }
+            
+            // Normalize
+            const maxVal = Math.max(...waveform);
+            if (maxVal > 0) {
+                for (let i = 0; i < waveform.length; i++) {
+                    waveform[i] = waveform[i] / maxVal;
+                }
+            }
+            
+            drawWaveform(waveform);
+        }
+
+        // --- PLAYHEAD ---
+        function updatePlayhead() {
+            if (!state.spectrogramData.currentSpec) return;
+            
+            const currentTime = dom.audioPlayer.currentTime;
+            const duration = state.audioDuration || dom.audioPlayer.duration || 1;
+            const progress = currentTime / duration;
+            
+            // Update waveform playhead
+            const waveformWidth = dom.waveformContainer.clientWidth;
+            dom.waveformPlayhead.style.left = (progress * waveformWidth) + 'px';
+            
+            // Update spectrogram playhead
+            const specWidth = dom.specContainer.clientWidth;
+            const specHeight = dom.specContainer.clientHeight;
+            ctx.playhead.clearRect(0, 0, specWidth, specHeight);
+            ctx.playhead.strokeStyle = '#e94560';
+            ctx.playhead.lineWidth = 2;
+            ctx.playhead.beginPath();
+            ctx.playhead.moveTo(progress * specWidth, 0);
+            ctx.playhead.lineTo(progress * specWidth, specHeight);
+            ctx.playhead.stroke();
+            
+            // Update time display
+            dom.currentTime.textContent = formatTime(currentTime);
+            
+            if (state.isPlaying) {
+                requestAnimationFrame(updatePlayhead);
+            }
+        }
+        
+        function seekToPosition(clientX, element) {
+            const rect = element.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const progress = x / rect.width;
+            const time = progress * (state.audioDuration || dom.audioPlayer.duration);
+            dom.audioPlayer.currentTime = Math.max(0, Math.min(time, dom.audioPlayer.duration));
+            updatePlayhead();
+        }
+
+        // --- SPECTROGRAM DRAWING ---
+        function drawSpectrogram(spec) {
+            state.spectrogramData.currentSpec = spec;
+            const { data, times, freqs } = spec;
+            
+            const canvas = dom.specCanvas;
+            const container = dom.specContainer;
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            
+            canvas.width = width;
+            canvas.height = height;
+            dom.selCanvas.width = width;
+            dom.selCanvas.height = height;
+            dom.playheadCanvas.width = width;
+            dom.playheadCanvas.height = height;
+            
+            // Find min/max for color scaling
+            let minDb = Infinity, maxDb = -Infinity;
+            for (const row of data) {
+                for (const val of row) {
+                    if (val < minDb) minDb = val;
+                    if (val > maxDb) maxDb = val;
+                }
+            }
+            if (minDb > -20 || !isFinite(minDb)) minDb = -80;
+            if (!isFinite(maxDb)) maxDb = 0;
+            
+            // Draw spectrogram
+            const frameWidth = width / times.length;
+            const binHeight = height / freqs.length;
+            
+            for (let i = 0; i < times.length; i++) {
+                for (let j = 0; j < freqs.length; j++) {
+                    const norm = (data[j][i] - minDb) / (maxDb - minDb);
+                    // Color: dark blue -> cyan -> yellow -> red
+                    const hue = 250 - norm * 250;
+                    ctx.spec.fillStyle = `hsl(${hue}, 100%, ${20 + norm * 40}%)`;
+                    ctx.spec.fillRect(i * frameWidth, height - (j + 1) * binHeight, frameWidth + 1, binHeight + 1);
+                }
+            }
+            
+            state.audioDuration = times[times.length - 1];
+            dom.totalTime.textContent = formatTime(state.audioDuration);
+            
+            drawAxes();
+        }
+
+        // --- AXES ---
+        function drawAxes() {
+            if (!state.spectrogramData.currentSpec) return;
+            const { times, freqs } = state.spectrogramData.currentSpec;
+            const specHeight = dom.specContainer.clientHeight;
+            const specWidth = dom.specContainer.clientWidth;
+            
+            // Y-Axis (Frequency)
+            dom.yAxisCanvas.width = 50;
+            dom.yAxisCanvas.height = specHeight;
+            ctx.yAxis.fillStyle = '#f8f9fa';
+            ctx.yAxis.fillRect(0, 0, 50, specHeight);
+            ctx.yAxis.fillStyle = '#212529';
+            ctx.yAxis.font = '10px monospace';
+            ctx.yAxis.textAlign = 'right';
+            
+            const maxFreq = freqs[freqs.length - 1];
+            const freqSteps = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000];
+            freqSteps.forEach(f => {
+                if (f <= maxFreq) {
+                    const y = specHeight - (f / maxFreq) * specHeight;
+                    ctx.yAxis.fillText(f >= 1000 ? `${f/1000}k` : f, 42, y + 3);
+                    ctx.yAxis.fillRect(45, y, 5, 1);
+                }
+            });
+            
+            // Y-axis label
+            ctx.yAxis.save();
+            ctx.yAxis.translate(10, specHeight / 2);
+            ctx.yAxis.rotate(-Math.PI / 2);
+            ctx.yAxis.textAlign = 'center';
+            ctx.yAxis.fillText('Hz', 0, 0);
+            ctx.yAxis.restore();
+            
+            // X-Axis (Time)
+            dom.xAxisCanvas.width = specWidth;
+            dom.xAxisCanvas.height = 35;
+            dom.xAxisCanvas.style.width = specWidth + 'px';
+            dom.xAxisCanvas.style.top = specHeight + 'px';
+            ctx.xAxis.fillStyle = '#f8f9fa';
+            ctx.xAxis.fillRect(0, 0, specWidth, 35);
+            ctx.xAxis.fillStyle = '#212529';
+            ctx.xAxis.font = '10px monospace';
+            ctx.xAxis.textAlign = 'center';
+            
+            const maxTime = times[times.length - 1];
+            const timeStep = maxTime > 120 ? 20 : maxTime > 60 ? 10 : maxTime > 30 ? 5 : maxTime > 10 ? 2 : 1;
+            for (let t = 0; t <= maxTime; t += timeStep) {
+                const x = (t / maxTime) * specWidth;
+                ctx.xAxis.fillRect(x, 0, 1, 5);
+                ctx.xAxis.fillText(t + 's', x, 18);
+            }
+        }
+
+        // --- COORDINATE CONVERSION ---
+        function getCoordsFromPixels(px, py) {
+            const { times, freqs } = state.spectrogramData.currentSpec;
+            return {
+                time: (px / dom.specCanvas.width) * times[times.length - 1],
+                freq: (1 - (py / dom.specCanvas.height)) * freqs[freqs.length - 1]
+            };
+        }
+
+        // --- SELECTION DRAWING ---
+        function drawSelection(x1, y1, x2, y2, isPreview = false) {
+            ctx.sel.clearRect(0, 0, dom.selCanvas.width, dom.selCanvas.height);
+            
+            // Fill
+            ctx.sel.fillStyle = isPreview ? 'rgba(233, 69, 96, 0.2)' : 'rgba(233, 69, 96, 0.3)';
+            ctx.sel.fillRect(x1, y1, x2 - x1, y2 - y1);
+            
+            // Border
+            ctx.sel.strokeStyle = '#e94560';
+            ctx.sel.lineWidth = 2;
+            ctx.sel.setLineDash(isPreview ? [5, 5] : []);
+            ctx.sel.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            ctx.sel.setLineDash([]);
+        }
+        
+        function drawCurrentSelection() {
+            if (!state.lastSelectionCoords || !state.spectrogramData.currentSpec) return;
+            
+            const { freqs, times } = state.spectrogramData.currentSpec;
+            const yMax = freqs[freqs.length - 1];
+            const xMax = times[times.length - 1];
+            
+            const x1 = (state.lastSelectionCoords.time_start / xMax) * dom.selCanvas.width;
+            const x2 = (state.lastSelectionCoords.time_end / xMax) * dom.selCanvas.width;
+            const y1 = (1 - state.lastSelectionCoords.freq_max / yMax) * dom.selCanvas.height;
+            const y2 = (1 - state.lastSelectionCoords.freq_min / yMax) * dom.selCanvas.height;
+            
+            drawSelection(x1, y1, x2, y2);
+        }
+        
+        function highlightFrequencyBand(action, isPreview = false) {
+            if (!state.spectrogramData.currentSpec) return;
+            
+            const { freqs, times } = state.spectrogramData.currentSpec;
+            const yMax = freqs[freqs.length - 1];
+            
+            const y1 = (1 - action.freq_max / yMax) * dom.selCanvas.height;
+            const y2 = (1 - action.freq_min / yMax) * dom.selCanvas.height;
+            
+            drawSelection(0, y1, dom.selCanvas.width, y2, isPreview);
+            
+            // Frequency labels
+            ctx.sel.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.sel.fillRect(5, y1 - 16, 70, 14);
+            ctx.sel.fillRect(5, y2 + 2, 70, 14);
+            ctx.sel.fillStyle = '#fff';
+            ctx.sel.font = '11px monospace';
+            ctx.sel.fillText(`${action.freq_max} Hz`, 8, y1 - 5);
+            ctx.sel.fillText(`${action.freq_min} Hz`, 8, y2 + 13);
+        }
+
+        // --- CLEAR STATE ---
+        function clearState(fullClear = true) {
+            ctx.sel.clearRect(0, 0, dom.selCanvas.width, dom.selCanvas.height);
+            dom.selInfo.textContent = 'None';
+            dom.btnAttenuate.disabled = true;
+            dom.btnAudition.disabled = true;
+            dom.btnBoost.disabled = true;
+            dom.btnHeal.disabled = true;
+            dom.btnCaptureNoise.disabled = true;
+            state.lastSelectionCoords = null;
+            
+            document.querySelectorAll('.ai-suggestion').forEach(el => el.classList.remove('active'));
+            
+            if (fullClear) {
+                dom.btnHpss.disabled = true;
+                dom.btnDownload.classList.add('disabled');
+                dom.btnApplyDenoise.disabled = true;
+                dom.btnAiSuggest.disabled = true;
+                dom.noiseProfileStatus.textContent = 'No Profile';
+                dom.noiseProfileStatus.classList.replace('bg-success', 'bg-secondary');
+                dom.layerSelector.style.display = 'none';
+                document.getElementById('layer-main').checked = true;
+                dom.aiSuggestionsList.innerHTML = '';
+                history.states = [];
+                history.currentIndex = -1;
+                updateHistoryButtons();
+            }
+        }
+
+        // --- AUDIO LOAD HANDLER ---
+        function onAudioLoaded(data, title) {
+            dom.audioPlayer.src = data.audio_path + uniqueParam();
+            state.spectrogramData = { current_audio: data.spectrogram };
+            drawSpectrogram(data.spectrogram);
+            drawWaveformFromSpec(data.spectrogram);
+            
+            // Store original for A/B comparison
+            state.originalAudioPath = data.audio_path;
+            state.originalSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+            state.editedAudioPath = null;
+            state.editedSpectrogram = null;
+            state.showingOriginal = false;
+            dom.btnToggleOriginal.disabled = true;
+            dom.btnToggleOriginal.textContent = 'Show Original (A/B)';
+            dom.btnToggleOriginal.classList.remove('btn-info');
+            dom.btnToggleOriginal.classList.add('btn-outline-info');
+            
+            dom.btnHpss.disabled = false;
+            dom.btnAiSuggest.disabled = false;
+            dom.btnHum60.disabled = false;
+            dom.btnHum50.disabled = false;
+            dom.btnNormalize.disabled = false;
+            dom.btnClickRepair.disabled = false;
+            dom.btnDeesser.disabled = false;
+            dom.btnDeclip.disabled = false;
+            dom.btnDecrackle.disabled = false;
+            dom.btnLoudness.disabled = false;
+            dom.btnDewind.disabled = false;
+            dom.btnDerustle.disabled = false;
+            dom.btnBreath.disabled = false;
+            dom.btnMouthDeclick.disabled = false;
+            dom.btnSpectralRepair.disabled = false;
+            dom.spectrogramTitle.textContent = title;
+            
+            // Save initial state to history
+            saveToHistory(data.spectrogram, data.audio_path);
+        }
+
+        // --- EVENT LISTENERS: TRANSPORT ---
+        dom.btnPlay.addEventListener('click', () => {
+            if (dom.audioPlayer.paused) {
+                dom.audioPlayer.play();
+                dom.btnPlay.textContent = '⏸';
+                dom.btnPlay.classList.add('active');
+                state.isPlaying = true;
+                requestAnimationFrame(updatePlayhead);
+            } else {
+                dom.audioPlayer.pause();
+                dom.btnPlay.textContent = '▶';
+                dom.btnPlay.classList.remove('active');
+                state.isPlaying = false;
+            }
+        });
+        
+        dom.btnStop.addEventListener('click', () => {
+            dom.audioPlayer.pause();
+            dom.audioPlayer.currentTime = 0;
+            dom.btnPlay.textContent = '▶';
+            dom.btnPlay.classList.remove('active');
+            state.isPlaying = false;
+            updatePlayhead();
+        });
+        
+        dom.btnLoop.addEventListener('click', () => {
+            state.isLooping = !state.isLooping;
+            dom.btnLoop.classList.toggle('active', state.isLooping);
+        });
+        
+        dom.audioPlayer.addEventListener('ended', () => {
+            dom.btnPlay.textContent = '▶';
+            dom.btnPlay.classList.remove('active');
+            state.isPlaying = false;
+        });
+        
+        dom.audioPlayer.addEventListener('loadedmetadata', () => {
+            state.audioDuration = dom.audioPlayer.duration;
+            dom.totalTime.textContent = formatTime(state.audioDuration);
+        });
+
+        // Click to seek on waveform
+        dom.waveformContainer.addEventListener('click', (e) => {
+            if (!state.selection.isDrawing) {
+                seekToPosition(e.clientX, dom.waveformContainer);
+            }
+        });
+
+        // --- EVENT LISTENERS: FILE OPERATIONS ---
+        dom.btnGenerate.addEventListener('click', async () => {
+            clearState(true);
+            const data = await processRequest('/generate', { method: 'POST' });
+            if (data) onAudioLoaded(data, 'Generated Test Signal');
+        });
+        
+        dom.btnUpload.addEventListener('click', async () => {
+            if (!dom.fileInput.files.length) return alert('Please select a file.');
+            clearState(true);
+            const formData = new FormData();
+            formData.append('file', dom.fileInput.files[0]);
+            const data = await processRequest('/upload', { method: 'POST', body: formData });
+            if (data) onAudioLoaded(data, dom.fileInput.files[0].name);
+        });
+
+        // --- EVENT LISTENERS: EDITING ---
+        dom.btnAudition.addEventListener('click', async () => {
+            if (!state.lastSelectionCoords) return;
+            
+            // Show processing state
+            dom.btnAudition.classList.add('btn-auditioning');
+            dom.btnAudition.textContent = '⏳ Processing...';
+            
+            const payload = {
+                ...state.lastSelectionCoords,
+                layer: document.querySelector('input[name="layer"]:checked').value
+            };
+            const data = await processRequest('/audition/region', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }, false);
+            
+            if (data) {
+                // Store duration and peak for display
+                state.auditionDuration = data.duration;
+                state.auditionPeak = data.peak_amplitude;
+                
+                dom.auditionPlayer.src = data.audition_path + uniqueParam();
+                dom.auditionPlayer.play();
+            } else {
+                // Request failed
+                dom.btnAudition.classList.remove('btn-auditioning');
+                dom.btnAudition.textContent = '▶ Audition';
+            }
+        });
+        
+        // Show "Playing" only when audio actually starts and has duration
+        dom.auditionPlayer.addEventListener('playing', () => {
+            const duration = state.auditionDuration || dom.auditionPlayer.duration;
+            const peakPct = state.auditionPeak ? (state.auditionPeak * 100).toFixed(0) : '?';
+            
+            if (duration > 0.05) {
+                dom.btnAudition.textContent = `♪ ${duration.toFixed(1)}s @ ${peakPct}%`;
+                dom.selCanvas.classList.add('selection-auditioning');
+            } else {
+                dom.btnAudition.classList.remove('btn-auditioning');
+                dom.btnAudition.textContent = '▶ Audition';
+                dom.auditionPlayer.pause();
+                alert('Selection too small to audition. Try selecting a larger area.');
+            }
+        });
+        
+        // Reset audition visual state when audio ends (or loop)
+        dom.auditionPlayer.addEventListener('ended', () => {
+            if (state.isLooping) {
+                // Loop the audition
+                dom.auditionPlayer.currentTime = 0;
+                dom.auditionPlayer.play();
+            } else {
+                dom.btnAudition.classList.remove('btn-auditioning');
+                dom.btnAudition.textContent = '▶ Audition';
+                dom.selCanvas.classList.remove('selection-auditioning');
+            }
+        });
+        
+        dom.auditionPlayer.addEventListener('error', () => {
+            dom.btnAudition.classList.remove('btn-auditioning');
+            dom.btnAudition.textContent = '▶ Audition';
+            dom.selCanvas.classList.remove('selection-auditioning');
+            alert('Could not play audition audio. The selection may be too small or contain no audio.');
+        });
+        
+        dom.btnAttenuate.addEventListener('click', async () => {
+            if (!state.lastSelectionCoords) return;
+            const payload = {
+                ...state.lastSelectionCoords,
+                layer: document.querySelector('input[name="layer"]:checked').value
+            };
+            const data = await processRequest('/edit/region', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                const specKey = document.querySelector('input[name="layer"]:checked').value;
+                state.spectrogramData[specKey] = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                // Store edited state for A/B comparison
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                state.showingOriginal = false;
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                clearState(false);
+            }
+        });
+
+        // --- EVENT LISTENERS: BOOST ---
+        dom.btnBoost.addEventListener('click', async () => {
+            if (!state.lastSelectionCoords) return;
+            const payload = {
+                ...state.lastSelectionCoords,
+                layer: document.querySelector('input[name="layer"]:checked').value,
+                boost: 2.0  // +6dB boost
+            };
+            const data = await processRequest('/edit/boost', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                const specKey = document.querySelector('input[name="layer"]:checked').value;
+                state.spectrogramData[specKey] = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                clearState(false);
+            }
+        });
+
+        // --- EVENT LISTENERS: HEAL ---
+        dom.btnHeal.addEventListener('click', async () => {
+            if (!state.lastSelectionCoords) return;
+            const payload = {
+                ...state.lastSelectionCoords,
+                layer: document.querySelector('input[name="layer"]:checked').value
+            };
+            const data = await processRequest('/edit/heal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                const specKey = document.querySelector('input[name="layer"]:checked').value;
+                state.spectrogramData[specKey] = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                clearState(false);
+            }
+        });
+
+        // --- EVENT LISTENERS: LAYERS & DENOISE ---
+        dom.btnHpss.addEventListener('click', async () => {
+            const data = await processRequest('/separate/hpss', { method: 'POST' });
+            if (data) {
+                state.spectrogramData.harmonic = data.harmonic_spectrogram;
+                state.spectrogramData.percussive = data.percussive_spectrogram;
+                dom.layerSelector.style.display = 'block';
+            }
+        });
+        
+        dom.layerSelector.addEventListener('change', e => {
+            const layer = e.target.value;
+            if (state.spectrogramData[layer]) {
+                drawSpectrogram(state.spectrogramData[layer]);
+                drawWaveformFromSpec(state.spectrogramData[layer]);
+                dom.spectrogramTitle.textContent = `Spectral Editor (${layer.charAt(0).toUpperCase() + layer.slice(1)})`;
+                clearState(false);
+            }
+        });
+        
+        dom.btnCaptureNoise.addEventListener('click', async () => {
+            if (!state.lastSelectionCoords) return;
+            const payload = {
+                ...state.lastSelectionCoords,
+                layer: document.querySelector('input[name="layer"]:checked').value
+            };
+            const data = await processRequest('/denoise/capture', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (data?.status === "Noise profile captured successfully") {
+                dom.noiseProfileStatus.textContent = 'Captured';
+                dom.noiseProfileStatus.classList.replace('bg-secondary', 'bg-success');
+                dom.btnApplyDenoise.disabled = false;
+            }
+        });
+        
+        dom.btnApplyDenoise.addEventListener('click', async () => {
+            const payload = { amount: parseFloat(dom.denoiseAmount.value) };
+            const data = await processRequest('/denoise/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                dom.layerSelector.style.display = 'none';
+                document.getElementById('layer-main').checked = true;
+                saveToHistory(data.spectrogram, data.audio_path);
+            }
+        });
+        
+        dom.denoiseAmount.addEventListener('input', () => {
+            dom.denoiseAmountLabel.textContent = parseFloat(dom.denoiseAmount.value).toFixed(1);
+        });
+
+        // --- EVENT LISTENERS: AI SUGGESTIONS ---
+        dom.btnAiSuggest.addEventListener('click', async () => {
+            dom.aiSuggestionsList.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm"></div> Analyzing...</div>';
+            const suggestions = await processRequest('/ai/suggest', { method: 'POST' });
+            dom.aiSuggestionsList.innerHTML = '';
+            
+            if (suggestions?.length > 0) {
+                suggestions.forEach((sugg, index) => {
+                    if (sugg.action.type === 'info') {
+                        dom.aiSuggestionsList.innerHTML = `<div class="alert alert-success py-2 small">${sugg.description}</div>`;
+                        return;
+                    }
+                    
+                    const card = document.createElement('div');
+                    card.className = 'card mb-2 ai-suggestion';
+                    card.innerHTML = `
+                        <div class="card-body p-2">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <strong class="text-warning">${sugg.action.freq_min}–${sugg.action.freq_max} Hz</strong>
+                                    <p class="mb-0 small text-light">${sugg.description}</p>
+                                </div>
+                                <button class="btn btn-sm btn-danger apply-btn ms-2">Fix</button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    card.addEventListener('mouseenter', () => highlightFrequencyBand(sugg.action, true));
+                    card.addEventListener('mouseleave', () => {
+                        if (!card.classList.contains('active')) {
+                            ctx.sel.clearRect(0, 0, dom.selCanvas.width, dom.selCanvas.height);
+                            if (state.lastSelectionCoords) drawCurrentSelection();
+                        }
+                    });
+                    
+                    card.addEventListener('click', (e) => {
+                        if (e.target.classList.contains('apply-btn')) {
+                            applyAiSuggestion(sugg.action);
+                            return;
+                        }
+                        document.querySelectorAll('.ai-suggestion').forEach(el => el.classList.remove('active'));
+                        card.classList.add('active');
+                        selectFrequencyBand(sugg.action);
+                    });
+                    
+                    dom.aiSuggestionsList.appendChild(card);
+                });
+            } else {
+                dom.aiSuggestionsList.innerHTML = '<div class="alert alert-secondary py-2 small">No issues detected.</div>';
+            }
+        });
+        
+        function selectFrequencyBand(action) {
+            highlightFrequencyBand(action, false);
+            const { times } = state.spectrogramData.currentSpec;
+            state.lastSelectionCoords = {
+                time_start: 0,
+                time_end: times[times.length - 1],
+                freq_min: action.freq_min,
+                freq_max: action.freq_max
+            };
+            dom.selInfo.innerHTML = `Freq: ${action.freq_min}–${action.freq_max} Hz (full duration)`;
+            dom.btnAttenuate.disabled = false;
+            dom.btnAudition.disabled = false;
+            dom.btnCaptureNoise.disabled = false;
+        }
+        
+        async function applyAiSuggestion(action) {
+            selectFrequencyBand(action);
+            dom.btnAttenuate.click();
+        }
+
+        // --- EVENT LISTENERS: UNDO/REDO ---
+        dom.btnUndo.addEventListener('click', undo);
+        dom.btnRedo.addEventListener('click', redo);
+
+        // --- EVENT LISTENERS: SELECTION ON SPECTROGRAM ---
+        dom.selCanvas.addEventListener('mousedown', e => {
+            if (!state.spectrogramData.currentSpec) return;
+            state.selection = { isDrawing: true, startX: e.offsetX, startY: e.offsetY };
+            document.querySelectorAll('.ai-suggestion').forEach(el => el.classList.remove('active'));
+        });
+        
+        dom.selCanvas.addEventListener('mousemove', e => {
+            if (!state.selection.isDrawing) return;
+            
+            let x1 = Math.min(state.selection.startX, e.offsetX);
+            let y1 = Math.min(state.selection.startY, e.offsetY);
+            let x2 = Math.max(state.selection.startX, e.offsetX);
+            let y2 = Math.max(state.selection.startY, e.offsetY);
+            
+            // Apply selection mode to preview
+            if (state.selectionMode === 'time') {
+                y1 = 0;
+                y2 = dom.selCanvas.height;
+            } else if (state.selectionMode === 'freq') {
+                x1 = 0;
+                x2 = dom.selCanvas.width;
+            }
+            
+            drawSelection(x1, y1, x2, y2, true);
+        });
+        
+        dom.selCanvas.addEventListener('mouseup', e => {
+            if (!state.selection.isDrawing) return;
+            state.selection.isDrawing = false;
+            
+            let [startX, endX] = [Math.min(state.selection.startX, e.offsetX), Math.max(state.selection.startX, e.offsetX)];
+            let [startY, endY] = [Math.min(state.selection.startY, e.offsetY), Math.max(state.selection.startY, e.offsetY)];
+            
+            // Minimum selection size
+            if (Math.abs(endX - startX) < 5 && Math.abs(endY - startY) < 5) {
+                // Treat as click-to-seek
+                seekToPosition(e.clientX, dom.selCanvas);
+                ctx.sel.clearRect(0, 0, dom.selCanvas.width, dom.selCanvas.height);
+                return;
+            }
+            
+            // Apply selection mode
+            if (state.selectionMode === 'time') {
+                // Full frequency, selected time range
+                startY = 0;
+                endY = dom.selCanvas.height;
+            } else if (state.selectionMode === 'freq') {
+                // Full time, selected frequency range
+                startX = 0;
+                endX = dom.selCanvas.width;
+            }
+            
+            const startCoords = getCoordsFromPixels(startX, endY);
+            const endCoords = getCoordsFromPixels(endX, startY);
+            
+            state.lastSelectionCoords = {
+                time_start: startCoords.time,
+                time_end: endCoords.time,
+                freq_min: startCoords.freq,
+                freq_max: endCoords.freq
+            };
+            
+            drawCurrentSelection();
+            
+            dom.selInfo.innerHTML = `Time: ${startCoords.time.toFixed(2)}s–${endCoords.time.toFixed(2)}s | Freq: ${startCoords.freq.toFixed(0)}–${endCoords.freq.toFixed(0)} Hz`;
+            dom.btnAttenuate.disabled = false;
+            dom.btnAudition.disabled = false;
+            dom.btnBoost.disabled = false;
+            dom.btnHeal.disabled = false;
+            dom.btnCaptureNoise.disabled = false;
+        });
+
+        // --- KEYBOARD SHORTCUTS ---
+        document.addEventListener('keydown', e => {
+            // Ignore if typing in input
+            if (e.target.tagName === 'INPUT') return;
+            
+            switch(e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    dom.btnPlay.click();
+                    break;
+                case 'KeyL':
+                    dom.btnLoop.click();
+                    break;
+                case 'KeyZ':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            redo();
+                        } else {
+                            undo();
+                        }
+                    }
+                    break;
+                case 'KeyY':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        redo();
+                    }
+                    break;
+            }
+        });
+
+        // --- WINDOW RESIZE ---
+        window.addEventListener('resize', () => {
+            if (state.spectrogramData.currentSpec) {
+                drawSpectrogram(state.spectrogramData.currentSpec);
+                drawWaveformFromSpec(state.spectrogramData.currentSpec);
+                if (state.lastSelectionCoords) drawCurrentSelection();
+            }
+        });
+
+        // --- PRESET BUTTONS ---
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!state.spectrogramData.currentSpec) return;
+                
+                const freqMin = parseInt(btn.dataset.freqMin);
+                const freqMax = parseInt(btn.dataset.freqMax);
+                const { times } = state.spectrogramData.currentSpec;
+                
+                state.lastSelectionCoords = {
+                    time_start: 0,
+                    time_end: times[times.length - 1],
+                    freq_min: freqMin,
+                    freq_max: freqMax
+                };
+                
+                highlightFrequencyBand({ freq_min: freqMin, freq_max: freqMax }, false);
+                
+                dom.selInfo.innerHTML = `Freq: ${freqMin}–${freqMax} Hz (full duration)`;
+                dom.btnAttenuate.disabled = false;
+                dom.btnAudition.disabled = false;
+                dom.btnBoost.disabled = false;
+                dom.btnHeal.disabled = false;
+                dom.btnCaptureNoise.disabled = false;
+            });
+        });
+
+        // --- A/B TOGGLE (Before/After) ---
+        dom.btnToggleOriginal.addEventListener('click', () => {
+            if (!state.originalSpectrogram || !state.editedSpectrogram) return;
+            
+            state.showingOriginal = !state.showingOriginal;
+            
+            if (state.showingOriginal) {
+                // Show original
+                drawSpectrogram(state.originalSpectrogram);
+                drawWaveformFromSpec(state.originalSpectrogram);
+                dom.audioPlayer.src = state.originalAudioPath + uniqueParam();
+                dom.btnToggleOriginal.textContent = 'Show Edited (A/B)';
+                dom.btnToggleOriginal.classList.add('btn-info');
+                dom.btnToggleOriginal.classList.remove('btn-outline-info');
+            } else {
+                // Show edited
+                drawSpectrogram(state.editedSpectrogram);
+                drawWaveformFromSpec(state.editedSpectrogram);
+                dom.audioPlayer.src = state.editedAudioPath + uniqueParam();
+                dom.btnToggleOriginal.textContent = 'Show Original (A/B)';
+                dom.btnToggleOriginal.classList.remove('btn-info');
+                dom.btnToggleOriginal.classList.add('btn-outline-info');
+            }
+        });
+
+        // --- QUICK FIX: HUM REDUCTION ---
+        async function applyHumReduction(baseFreq) {
+            const data = await processRequest('/process/hum-reduction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ base_freq: baseFreq, harmonics: 8, bandwidth: 3 })
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                alert(`Removed ${baseFreq}Hz hum and harmonics: ${data.removed_bands.join(', ')}`);
+            }
+        }
+        
+        dom.btnHum60.addEventListener('click', () => applyHumReduction(60));
+        dom.btnHum50.addEventListener('click', () => applyHumReduction(50));
+
+        // --- QUICK FIX: NORMALIZE ---
+        dom.btnNormalize.addEventListener('click', async () => {
+            const data = await processRequest('/process/normalize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_db: -1.0 })
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                const gainStr = data.gain_applied_db >= 0 ? `+${data.gain_applied_db.toFixed(1)}` : data.gain_applied_db.toFixed(1);
+                alert(`Normalized to -1dB peak (${gainStr} dB gain applied)`);
+            }
+        });
+
+        // --- QUICK FIX: CLICK REPAIR ---
+        dom.btnClickRepair.addEventListener('click', async () => {
+            const data = await processRequest('/process/click-repair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ threshold: 3.0 })
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+                alert(`Click repair complete: ${data.clicks_repaired} clicks repaired`);
+            }
+        });
+
+        // --- SELECTION MODE BUTTONS ---
+        function setSelectionMode(mode) {
+            state.selectionMode = mode;
+            dom.selModeRect.classList.toggle('active', mode === 'rect');
+            dom.selModeTime.classList.toggle('active', mode === 'time');
+            dom.selModeFreq.classList.toggle('active', mode === 'freq');
+        }
+        dom.selModeRect.addEventListener('click', () => setSelectionMode('rect'));
+        dom.selModeTime.addEventListener('click', () => setSelectionMode('time'));
+        dom.selModeFreq.addEventListener('click', () => setSelectionMode('freq'));
+
+        // --- DE-ESSER ---
+        dom.btnDeesser.addEventListener('click', async () => {
+            const data = await processRequest('/process/deesser', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ freq_min: 4000, freq_max: 9000, reduction: 0.5 })
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                
+                saveToHistory(data.spectrogram, data.audio_path);
+            }
+        });
+
+        // --- Helper for simple process buttons ---
+        async function simpleProcess(endpoint, body = {}) {
+            const data = await processRequest(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                saveToHistory(data.spectrogram, data.audio_path);
+                return data;
+            }
+            return null;
+        }
+
+        // --- DE-CLIP ---
+        dom.btnDeclip.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/declip', { threshold: 0.95 });
+            if (data) alert(`De-clipped ${data.clipped_samples} samples`);
+        });
+
+        // --- DE-CRACKLE ---
+        dom.btnDecrackle.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/decrackle', { strength: 0.5 });
+            if (data) alert(`Removed ${data.crackles_removed} crackle artifacts`);
+        });
+
+        // --- LOUDNESS OPTIMIZE ---
+        dom.btnLoudness.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/loudness', { target_lufs: -14 });
+            if (data) alert(`Loudness: ${data.original_lufs} → ${data.target_lufs} LUFS (${data.gain_applied_db > 0 ? '+' : ''}${data.gain_applied_db} dB)`);
+        });
+
+        // --- DE-WIND ---
+        dom.btnDewind.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/dewind', { cutoff: 80, strength: 0.9 });
+            if (data) alert(`Wind removed below ${data.cutoff_hz}Hz`);
+        });
+
+        // --- DE-RUSTLE ---
+        dom.btnDerustle.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/derustle', { sensitivity: 0.5 });
+            if (data) alert(`Reduced ${data.rustle_frames_detected} rustle frames`);
+        });
+
+        // --- BREATH CONTROL ---
+        dom.btnBreath.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/breath-control', { reduction: 0.7, sensitivity: 0.5 });
+            if (data) alert(`Reduced ${data.breath_frames_reduced} breath frames`);
+        });
+
+        // --- MOUTH DE-CLICK ---
+        dom.btnMouthDeclick.addEventListener('click', async () => {
+            const data = await simpleProcess('/process/mouth-declick', { sensitivity: 0.5 });
+            if (data) alert(`Removed ${data.mouth_clicks_removed} mouth clicks`);
+        });
+
+        // --- SPECTRAL REPAIR (selection-based) ---
+        dom.btnSpectralRepair.addEventListener('click', async () => {
+            if (!state.selection) { alert('Draw a selection first'); return; }
+            const data = await processRequest('/edit/spectral-repair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    t_start: state.selection.t_start,
+                    t_end: state.selection.t_end,
+                    f_start: state.selection.f_start,
+                    f_end: state.selection.f_end,
+                    layer: state.activeLayer
+                })
+            });
+            if (data) {
+                dom.audioPlayer.src = data.audio_path + uniqueParam();
+                state.spectrogramData.current_audio = data.spectrogram;
+                drawSpectrogram(data.spectrogram);
+                drawWaveformFromSpec(data.spectrogram);
+                dom.btnDownload.href = data.audio_path + uniqueParam();
+                dom.btnDownload.classList.remove('disabled');
+                state.editedAudioPath = data.audio_path;
+                state.editedSpectrogram = JSON.parse(JSON.stringify(data.spectrogram));
+                dom.btnToggleOriginal.disabled = false;
+                saveToHistory(data.spectrogram, data.audio_path);
+            }
+        });
+        
+    });
+    </script>
+</body>
+</html>
