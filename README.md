@@ -113,4 +113,4 @@ MIT License - feel free to use, modify, and distribute.
 
 Hamilton Barber - [hamiltonbarber.com](https://www.hamiltonbarber.com)
 
-Donate if you want, but don't feel like you need to: [PayPal](https://paypal.me/HamiltonBBarber)
+Support if you want, but don't feel like you need to: [PayPal](https://paypal.me/HamiltonBBarber)
