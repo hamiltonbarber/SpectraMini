@@ -112,5 +112,3 @@ MIT License - feel free to use, modify, and distribute.
 ## Author
 
 Hamilton Barber - [hamiltonbarber.com](https://www.hamiltonbarber.com)
-
-Support if you want, but don't feel like you need to: [PayPal](https://paypal.me/HamiltonBBarber)
